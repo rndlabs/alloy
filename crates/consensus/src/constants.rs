@@ -39,6 +39,14 @@ pub const HOLESKY_GENESIS_HASH: B256 =
 pub const DEV_GENESIS_HASH: B256 =
     b256!("2f980576711e3617a5e4d83dd539548ec0f7792007d505a3d2e9674833af2d7c");
 
+/// Gnosis mainnet genesis hash.
+pub const GNOSIS_GENESIS: B256 =
+    b256!("4f1dd23188aab3a76b463e4af801b52b1248ef073c648cbdc4c9333d3da79756");
+
+/// Gnosis testnet (chiado) genesis hash.
+pub const CHIADO_GENESIS: B256 =
+    b256!("ada44fd8d2ecab8b08f256af07ad3e777f17fb434f8f8e678b312f576212ba9a");
+
 /// Optimism goerli genesis hash.
 pub const GOERLI_OP_GENESIS: B256 =
     b256!("c1fc15cd51159b1f1e5cbc4b82e85c1447ddfa33c52cf1d98d14fba0d6354be1");

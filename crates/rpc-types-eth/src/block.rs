@@ -2,10 +2,11 @@
 
 use crate::{ConversionError, Transaction, Withdrawal};
 use alloc::collections::BTreeMap;
+use alloy_consensus::AuthorityRound;
 use alloy_network_primitives::{
     BlockResponse, BlockTransactions, HeaderResponse, TransactionResponse,
 };
-use alloy_primitives::{Address, BlockHash, Bloom, Bytes, B256, B64, U256};
+use alloy_primitives::{Address, BlockHash, Bloom, Bytes, B256, B64, U256, FixedBytes};
 
 use alloc::vec::Vec;
 
@@ -108,6 +109,15 @@ pub struct Header {
     /// Nonce
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     pub nonce: Option<B64>,
+    /// Step for authority round
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub step: Option<u64>,
+    /// Signature for authority round
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    pub signature: Option<FixedBytes<65>>,
     /// Base fee per unit of gas (if past London)
     #[cfg_attr(
         feature = "serde",
@@ -195,6 +205,8 @@ impl TryFrom<Header> for alloy_consensus::Header {
             mix_hash,
             nonce,
             base_fee_per_gas,
+            step,
+            signature,
             withdrawals_root,
             blob_gas_used,
             excess_blob_gas,
@@ -220,6 +232,16 @@ impl TryFrom<Header> for alloy_consensus::Header {
             timestamp,
             mix_hash: mix_hash.ok_or(ConversionError::Custom("missing block mix_hash".into()))?,
             nonce: nonce.ok_or(ConversionError::Custom("missing block nonce".into()))?,
+            authority_round: {
+                if let Some(step) = step {
+                    Some(AuthorityRound {
+                        step,
+                        signature: signature.ok_or(ConversionError::Custom("missing block signature".into()))?,
+                    })
+                } else {
+                    None
+                }
+            },
             base_fee_per_gas,
             blob_gas_used,
             excess_blob_gas,
@@ -437,6 +459,8 @@ mod tests {
                 total_difficulty: Some(U256::from(100000)),
                 mix_hash: Some(B256::with_last_byte(14)),
                 nonce: Some(B64::with_last_byte(15)),
+                step: None,
+                signature: None,
                 base_fee_per_gas: Some(20),
                 blob_gas_used: None,
                 excess_blob_gas: None,
@@ -480,6 +504,8 @@ mod tests {
                 total_difficulty: Some(U256::from(100000)),
                 mix_hash: Some(B256::with_last_byte(14)),
                 nonce: Some(B64::with_last_byte(15)),
+                step: None,
+                signature: None,
                 base_fee_per_gas: Some(20),
                 blob_gas_used: None,
                 excess_blob_gas: None,
@@ -523,6 +549,8 @@ mod tests {
                 total_difficulty: Some(U256::from(100000)),
                 mix_hash: Some(B256::with_last_byte(14)),
                 nonce: Some(B64::with_last_byte(15)),
+                step: None,
+                signature: None,
                 base_fee_per_gas: Some(20),
                 blob_gas_used: None,
                 excess_blob_gas: None,

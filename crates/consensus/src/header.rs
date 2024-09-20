@@ -6,10 +6,12 @@ use alloy_eips::{
     BlockNumHash,
 };
 use alloy_primitives::{
-    b256, keccak256, Address, BlockNumber, Bloom, Bytes, Sealable, Sealed, B256, B64, U256,
+    b256, keccak256, Address, BlockNumber, Bloom, Bytes, FixedBytes, Sealable, Sealed, B256, B64,
+    U256,
 };
 use alloy_rlp::{
-    length_of_length, Buf, BufMut, Decodable, Encodable, EMPTY_LIST_CODE, EMPTY_STRING_CODE,
+    length_of_length, Buf, BufMut, Decodable, Encodable, RlpDecodable, RlpEncodable,
+    EMPTY_LIST_CODE, EMPTY_STRING_CODE,
 };
 use core::mem;
 
@@ -20,6 +22,18 @@ pub const EMPTY_OMMER_ROOT_HASH: B256 =
 /// Root hash of an empty trie.
 pub const EMPTY_ROOT_HASH: B256 =
     b256!("56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421");
+
+/// Authority round information for an AuRa consensus block.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, RlpDecodable, RlpEncodable)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+pub struct AuthorityRound {
+    /// The step number of the authority round.
+    pub step: u64,
+    /// The signature of the authority round.
+    pub signature: FixedBytes<65>,
+}
 
 /// Ethereum Block header
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -75,6 +89,9 @@ pub struct Header {
     /// A 64-bit value which, combined with the mixhash, proves that a sufficient amount of
     /// computation has been carried out on this block; formally Hn.
     pub nonce: B64,
+    /// The authority round information for this block if it is an AuRa block.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    pub authority_round: Option<AuthorityRound>,
     /// A scalar representing EIP1559 base fee which can move up or down each block according
     /// to a formula which is a function of gas used in parent block and gas target
     /// (block gas limit divided by elasticity multiplier) of parent block.
@@ -157,6 +174,7 @@ impl Default for Header {
             extra_data: Default::default(),
             mix_hash: Default::default(),
             nonce: B64::ZERO,
+            authority_round: None,
             base_fee_per_gas: None,
             withdrawals_root: None,
             blob_gas_used: None,
@@ -266,6 +284,7 @@ impl Header {
         mem::size_of::<u64>() + // timestamp
         mem::size_of::<B256>() + // mix hash
         mem::size_of::<u64>() + // nonce
+        mem::size_of::<Option<AuthorityRound>>() + // authority round
         mem::size_of::<Option<u128>>() + // base fee per gas
         mem::size_of::<Option<u128>>() + // blob gas used
         mem::size_of::<Option<u128>>() + // excess blob gas
@@ -289,8 +308,14 @@ impl Header {
         length += U256::from(self.gas_used).length();
         length += self.timestamp.length();
         length += self.extra_data.length();
-        length += self.mix_hash.length();
-        length += self.nonce.length();
+
+        if let Some(authority_round) = &self.authority_round {
+            length += authority_round.step.length();
+            length += authority_round.signature.length();
+        } else {
+            length += self.mix_hash.length();
+            length += self.nonce.length();
+        }
 
         if let Some(base_fee) = self.base_fee_per_gas {
             length += U256::from(base_fee).length();
@@ -398,8 +423,15 @@ impl Encodable for Header {
         U256::from(self.gas_used).encode(out);
         self.timestamp.encode(out);
         self.extra_data.encode(out);
-        self.mix_hash.encode(out);
-        self.nonce.encode(out);
+
+        // Encode if authority round is present
+        if let Some(ref authority_round) = self.authority_round {
+            authority_round.step.encode(out);
+            authority_round.signature.encode(out);
+        } else {
+            self.mix_hash.encode(out);
+            self.nonce.encode(out);
+        }
 
         // Encode base fee. Put empty list if base fee is missing,
         // but withdrawals root is present.
@@ -490,6 +522,7 @@ impl Decodable for Header {
             extra_data: Decodable::decode(buf)?,
             mix_hash: Decodable::decode(buf)?,
             nonce: B64::decode(buf)?,
+            authority_round: None,
             base_fee_per_gas: None,
             withdrawals_root: None,
             blob_gas_used: None,
@@ -497,6 +530,18 @@ impl Decodable for Header {
             parent_beacon_block_root: None,
             requests_root: None,
         };
+
+        if started_len - buf.len() < rlp_head.payload_length {
+            if buf.first().map(|b| *b == EMPTY_LIST_CODE).unwrap_or_default() {
+                buf.advance(1)
+            } else {
+                let authority_round = AuthorityRound {
+                    step: Decodable::decode(buf)?,
+                    signature: Decodable::decode(buf)?,
+                };
+                this.authority_round = Some(authority_round);
+            }
+        }
 
         if started_len - buf.len() < rlp_head.payload_length {
             if buf.first().map(|b| *b == EMPTY_LIST_CODE).unwrap_or_default() {
@@ -620,6 +665,7 @@ impl<'a> arbitrary::Arbitrary<'a> for Header {
             extra_data: u.arbitrary()?,
             mix_hash: u.arbitrary()?,
             nonce: u.arbitrary()?,
+            authority_round: u.arbitrary()?,
             base_fee_per_gas: u.arbitrary()?,
             blob_gas_used: u.arbitrary()?,
             excess_blob_gas: u.arbitrary()?,
@@ -638,11 +684,11 @@ impl<'a> arbitrary::Arbitrary<'a> for Header {
     }
 }
 
-#[cfg(all(test, feature = "serde"))]
 mod tests {
     use super::*;
 
     #[test]
+    #[cfg(all(test, feature = "serde"))]
     fn header_serde() {
         let raw = r#"{"parentHash":"0x0000000000000000000000000000000000000000000000000000000000000000","ommersHash":"0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347","beneficiary":"0x0000000000000000000000000000000000000000","stateRoot":"0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421","transactionsRoot":"0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421","receiptsRoot":"0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421","withdrawalsRoot":"0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421","logsBloom":"0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","difficulty":"0x0","number":"0x0","gasLimit":"0x0","gasUsed":"0x0","timestamp":"0x0","mixHash":"0x0000000000000000000000000000000000000000000000000000000000000000","nonce":"0x0000000000000000","baseFeePerGas":"0x1","extraData":"0x"}"#;
         let header = Header {
@@ -656,5 +702,23 @@ mod tests {
 
         let decoded: Header = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, header);
+    }
+
+    #[test]
+    fn header_gnosis() {
+        let mut header = Header::default();
+        header.difficulty = U256::from(131072);
+        header.gas_limit = 10000000;
+        header.state_root =
+            b256!("40cf4430ecaa733787d1a65154a3b9efb560c95d9e324a23b97f0609b539133b");
+
+        let authority_round = AuthorityRound { step: 0, signature: FixedBytes::new([0u8; 65]) };
+
+        header.authority_round = Some(authority_round);
+
+        assert_eq!(
+            header.hash_slow(),
+            b256!("4f1dd23188aab3a76b463e4af801b52b1248ef073c648cbdc4c9333d3da79756")
+        );
     }
 }
